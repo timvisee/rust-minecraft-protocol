@@ -32,7 +32,7 @@ impl HandshakeServerBoundPacket {
 pub struct Handshake {
     #[data_type(with = "var_int")]
     pub protocol_version: i32,
-    #[data_type(max_length = 255)]
+    #[data_type(max_length = 32767)]
     pub server_addr: String,
     pub server_port: u16,
     #[data_type(with = "var_int")]
@@ -54,5 +54,34 @@ impl Handshake {
         };
 
         HandshakeServerBoundPacket::Handshake(handshake)
+    }
+}
+
+#[cfg(test)]
+mod server_addr_length_tests {
+    use super::*;
+    use crate::encoder::Encoder;
+    use std::io::Cursor;
+
+    #[test]
+    fn decodes_handshake_with_forwarded_server_addr_over_255_chars() {
+        // Velocity/BungeeCord modern forwarding appends a null-separated
+        // UUID and signed property payload to server_addr, which routinely
+        // exceeds the legacy 255-character Minecraft handshake limit.
+        let long_addr = format!("play.example.com\0{}", "x".repeat(400));
+        assert!(long_addr.len() > 255);
+
+        let handshake = Handshake {
+            protocol_version: 765,
+            server_addr: long_addr.clone(),
+            server_port: 25565,
+            next_state: 2,
+        };
+
+        let mut buf = Vec::new();
+        handshake.encode(&mut buf).unwrap();
+
+        let decoded = Handshake::decode(&mut Cursor::new(buf)).unwrap();
+        assert_eq!(decoded.server_addr, long_addr);
     }
 }

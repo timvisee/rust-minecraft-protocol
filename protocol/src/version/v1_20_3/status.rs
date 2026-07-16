@@ -1,3 +1,4 @@
+use crate::data::chat::Message;
 use crate::data::server_status::{OnlinePlayers, ServerVersion};
 use crate::decoder::Decoder;
 use crate::error::DecodeError;
@@ -13,11 +14,18 @@ set_packet_id!(PingRequest, 0x01);
 set_packet_id!(StatusResponse, 0x00);
 set_packet_id!(PingResponse, 0x01);
 
+#[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[serde(untagged)]
+pub enum Description {
+    Text(String),
+    Component(Message),
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ServerStatus {
     pub version: ServerVersion,
     pub players: OnlinePlayers,
-    pub description: String,
+    pub description: Description,
     pub favicon: Option<String>,
 }
 
@@ -113,6 +121,7 @@ impl StatusResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::{Description, ServerStatus, StatusResponse};
     use crate::data::chat::{Message, Payload};
     use crate::data::server_status::{OnlinePlayer, OnlinePlayers, ServerVersion};
     use crate::decoder::Decoder;
@@ -189,7 +198,7 @@ mod tests {
 
         let server_status = ServerStatus {
             version,
-            description: Message::new(Payload::text("Description")),
+            description: Description::Component(Message::new(Payload::text("Description"))),
             players,
             favicon: None,
         };
@@ -224,7 +233,73 @@ mod tests {
         assert_eq!(server_status.players.sample, vec![player]);
         assert_eq!(
             server_status.description,
-            Message::new(Payload::text("Description"))
+            Description::Component(Message::new(Payload::text("Description")))
         );
+    }
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+    use crate::data::chat::{Color, Message, Payload};
+    use crate::encoder::Encoder;
+
+    #[test]
+    fn deserializes_component_description() {
+        let json = r#"{"text":"Welcome on  server!"}"#;
+        let description: Description = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            description,
+            Description::Component(Message::new(Payload::text("Welcome on  server!")))
+        );
+    }
+
+    #[test]
+    fn deserializes_component_description_with_color_and_extra() {
+        let json = r#"{"color":"aqua","bold":true,"text":"Loss Server","extra":[{"color":"aqua","text":"It's dead, just like me"}]}"#;
+        let description: Description = serde_json::from_str(json).unwrap();
+        match description {
+            Description::Component(message) => {
+                assert_eq!(message.color, Some(Color::Aqua));
+                assert_eq!(message.bold, Some(true));
+                assert_eq!(message.extra.len(), 1);
+            }
+            Description::Text(_) => {
+                panic!("expected a component description, got a text description")
+            }
+        }
+    }
+
+    #[test]
+    fn deserializes_text_description() {
+        let json = r#""A Minecraft Server""#;
+        let description: Description = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            description,
+            Description::Text("A Minecraft Server".to_string())
+        );
+    }
+
+    #[test]
+    fn round_trips_server_status_with_component_description() {
+        let server_status = ServerStatus {
+            version: ServerVersion {
+                name: "1.20.4".to_string(),
+                protocol: 765,
+            },
+            players: OnlinePlayers {
+                online: 0,
+                max: 20,
+                sample: vec![],
+            },
+            description: Description::Component(Message::new(Payload::text("Loss Server"))),
+            favicon: None,
+        };
+
+        let mut buf = Vec::new();
+        server_status.encode(&mut buf).unwrap();
+
+        let decoded = ServerStatus::decode(&mut buf.as_slice()).unwrap();
+        assert_eq!(decoded.description, server_status.description);
     }
 }
